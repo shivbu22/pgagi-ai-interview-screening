@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Screenwise — Project Document</title>
+<style>
+  @page { size: A4; margin: 20mm 18mm; }
+  body { font-family: Georgia, "Times New Roman", serif; color: #1c1917; font-size: 11.2pt; line-height: 1.6; }
+  h1 { font-size: 24pt; margin: 0 0 4px; letter-spacing: -0.01em; }
+  h1 span { color: #0f766e; }
+  .subtitle { font-family: Helvetica, Arial, sans-serif; color: #57534e; font-size: 11pt; margin-bottom: 6px; }
+  .meta { font-family: Helvetica, Arial, sans-serif; font-size: 9.5pt; color: #57534e; border-bottom: 2px solid #0f766e; padding-bottom: 12px; margin-bottom: 22px; }
+  h2 { font-size: 14.5pt; margin: 26px 0 8px; border-bottom: 1px solid #e7e5e4; padding-bottom: 4px; }
+  h3 { font-size: 12pt; margin: 18px 0 6px; }
+  p { margin: 0 0 10px; text-align: justify; }
+  ul, ol { margin: 0 0 10px; }
+  li { margin-bottom: 4px; }
+  code, pre { font-family: "DejaVu Sans Mono", Consolas, monospace; font-size: 9.3pt; }
+  pre { background: #f5f5f4; border: 1px solid #e7e5e4; border-radius: 6px; padding: 12px 14px; line-height: 1.45; white-space: pre-wrap; }
+  table { border-collapse: collapse; width: 100%; font-family: Helvetica, Arial, sans-serif; font-size: 9.8pt; margin: 8px 0 14px; }
+  th, td { border: 1px solid #d6d3d1; padding: 6px 9px; text-align: left; vertical-align: top; }
+  th { background: #f5f5f4; }
+  figure { margin: 14px 0; }
+  figure img { width: 100%; border: 1px solid #d6d3d1; border-radius: 6px; }
+  figcaption { font-family: Helvetica, Arial, sans-serif; font-size: 9pt; color: #57534e; margin-top: 5px; }
+  .callout { background: #f0fdfa; border-left: 3px solid #0f766e; padding: 10px 14px; margin: 12px 0; font-size: 10.8pt; }
+  .pagebreak { page-break-before: always; }
+</style>
+</head>
+<body>
+
+<h1>Screen<span>wise</span></h1>
+<div class="subtitle">AI Interview Screening System — Project Document</div>
+<div class="meta">
+  Take-home assignment for the PGAGI AI/ML Intern application &nbsp;·&nbsp;
+  Candidate: Shivam Yadav &nbsp;·&nbsp; Stack: FastAPI + React (Vite) + SQLite &nbsp;·&nbsp;
+  Runs fully locally — no external API keys
+</div>
+
+<h2>1. Problem</h2>
+<p>Technical screening is expensive to do well. A recruiter or hiring manager
+must read each resume, work out what the candidate actually knows, and then
+prepare interview questions that are (a) relevant to the role, (b) grounded in
+the candidate's claimed experience, and (c) deep enough to separate real
+understanding from keyword familiarity. Done manually this takes 30–60 minutes
+per candidate and varies wildly between interviewers.</p>
+<p>The assignment: build a system where a candidate uploads a resume, picks a
+target role, and the system <strong>dynamically generates interview
+questions</strong> from the resume plus a retrieval-augmented knowledge base
+whose primary source for AI/ML roles is Tom Mitchell's <em>Machine
+Learning</em> — with a frontend, a backend, and a database for sessions.</p>
+
+<h2>2. Solution overview</h2>
+<p>Screenwise implements the full pipeline in one local process:</p>
+<ol>
+  <li><strong>Parse.</strong> The resume (PDF via pypdf, or plain text) is
+  parsed into a candidate profile: name, email, skills matched against a
+  curated ~45-term lexicon, project titles extracted from the Projects
+  section with layout-aware heuristics, and experience signals.</li>
+  <li><strong>Retrieve.</strong> A TF-IDF retriever ranks the 16 knowledge-base
+  chunks against a query composed of the target role's focus terms and the
+  candidate's own skills — so a candidate strong in neural networks is asked
+  about neural networks, while a data-science candidate is steered toward
+  Bayesian learning and evaluation.</li>
+  <li><strong>Generate.</strong> A deterministic composer assembles a
+  10-question set from three grounded sources (Section 4), each question
+  labelled with its source and difficulty, and paired with a model-answer
+  hint for the interviewer.</li>
+  <li><strong>Store.</strong> Sessions persist in SQLite and can be reopened
+  from the UI's recent-sessions list.</li>
+</ol>
+
+<h2>3. Architecture</h2>
+<pre>  React SPA (Vite build, served by FastAPI)
+        │  POST /api/sessions  (multipart: resume file + role)
+        ▼
+  FastAPI backend
+    ├── resume_parser.py   PDF/text → profile {name, email, skills,
+    │                      projects, experience}  (pypdf + heuristics)
+    ├── retriever.py       TF-IDF (scikit-learn) over knowledge_base.json
+    ├── generator.py       deterministic 10-question composition
+    ├── db.py              SQLite session storage
+    └── data/knowledge_base.json   13 topics · 16 chunks · 32 questions</pre>
+<p><strong>Stack choices.</strong> The brief permits React or Next.js on the
+frontend and FastAPI or Flask on the backend. This build uses a Vite-built
+React SPA served directly by FastAPI: an internal screening tool has no SEO
+or SSR requirement, and a single-process deployment keeps the demo runnable
+with one command. Modules are deliberately decoupled — only
+<code>main.py</code> knows about FastAPI; the parser, retriever, and
+generator are plain Python and unit-testable in isolation.</p>
+<p><strong>Why no LLM?</strong> The brief's hard constraint is that the system
+must run with <em>no external API keys</em>. Generation is therefore
+retrieval- and template-based (Section 4). This buys three properties an
+LLM call cannot guarantee: determinism (same resume + role → same
+interview), auditability (every question shows exactly which source produced
+it), and zero running cost. An optional LLM polish layer could be added
+behind an environment key without changing the pipeline, but the no-key path
+is complete by design.</p>
+
+<h2 class="pagebreak">4. RAG design and question generation</h2>
+<h3>4.1 Knowledge-base construction</h3>
+<p>The KB follows the topic structure of Mitchell's <em>Machine
+Learning</em> (1997): concept learning, decision trees, neural networks,
+evaluating hypotheses, Bayesian learning, computational learning theory,
+instance-based learning, genetic algorithms, rule learning, analytical
+learning, and reinforcement learning. Every chunk is an <strong>original
+concept note written for this project</strong> — summaries, key points, and
+questions are paraphrases composed from the topic structure; no text from
+the book is reproduced. Each chunk contains: a 3–5 sentence summary, three
+key points, key terms, and two hand-written interview questions (with
+model-answer hints) tagged Basic / Intermediate / Advanced.</p>
+<h3>4.2 Retrieval</h3>
+<p>Each chunk is indexed as one TF-IDF document (title + summary + terms +
+key points, unigrams + bigrams, English stop-words removed). The query is
+the concatenation of (i) the role's focus terms — e.g. for AI/ML Engineer:
+<em>neural networks, overfitting, decision trees, evaluation,
+generalisation</em> — and (ii) the candidate's extracted skills and the
+role's focus skills. Cosine similarity ranks the chunks; the top 8 are
+returned with scores, which the UI displays so the interviewer can see
+<em>why</em> these topics were chosen for this candidate.</p>
+<h3>4.3 Composition</h3>
+<table>
+  <tr><th style="width:22%">Source</th><th style="width:12%">Count</th><th>How it is produced</th></tr>
+  <tr><td>Knowledge base</td><td>5</td><td>Hand-written questions from the
+  top-ranked chunks, one per chunk first, then a difficulty rebalance that
+  guarantees at least one Advanced question in the set.</td></tr>
+  <tr><td>Resume-grounded</td><td>3</td><td>Templates instantiated with the
+  candidate's actual extracted projects and skills ("In your project
+  'MARAT', what was the hardest technical problem, and how did you decide
+  your approach worked?").</td></tr>
+  <tr><td>Role focus</td><td>2</td><td>If the role needs skills missing from
+  the resume, honest gap questions ("This role works heavily with X… how
+  would you get productive in two weeks?"); otherwise Advanced depth probes
+  on matched focus skills, de-duplicated against the resume questions.</td></tr>
+</table>
+<p>Every question carries a <em>model-answer hint</em>: for KB questions, the
+hint plus the chunk's key points define what a strong answer covers; for
+resume and role questions, the hint describes the evidence of depth the
+interviewer should listen for.</p>
+
+<h2>5. How to run</h2>
+<pre>git clone https://github.com/shivbu22/pgagi-ai-interview-screening
+cd pgagi-ai-interview-screening
+./run.sh            # venv + deps + frontend build + server on :8410
+# open http://localhost:8410</pre>
+<p>Manual equivalent and API details are in the repository README.</p>
+
+<h2>6. Verification</h2>
+<p>The system was tested end-to-end with a real resume PDF (the author's own
+AI/ML Engineer resume) through the running UI:</p>
+<ul>
+  <li>Parser extracted <strong>22 skills</strong> and all <strong>4 project
+  titles</strong> (MARAT, AI Voice Receptionist, neteyes, PIKO (Nook)) —
+  after two heuristic fixes for PDF line-wrap fragments.</li>
+  <li>Retrieval ranked Artificial Neural Networks (0.27), Reinforcement
+  Learning (0.18), and Inductive Bias (0.12) highest for the AI/ML Engineer
+  role given that resume's skills — a sensible match.</li>
+  <li>The generated set of 10 questions referenced the candidate's real
+  projects and skills, spanned Basic → Advanced, and every hint expanded
+  correctly in the UI. No console errors.</li>
+</ul>
+<figure>
+  <img src="../assets/shot-3-questions.png" alt="Generated interview set">
+  <figcaption>Figure 1 — Generated interview set: candidate profile (skills,
+  projects, retrieved KB topics with scores) beside the question list.</figcaption>
+</figure>
+<figure>
+  <img src="../assets/shot-4-hint.png" alt="Model-answer hint expanded">
+  <figcaption>Figure 2 — A knowledge-base question with its model-answer hint
+  and KB key points expanded.</figcaption>
+</figure>
+
+<h2 class="pagebreak">7. Limitations and next steps</h2>
+<ul>
+  <li><strong>Parsing heuristics.</strong> Section detection assumes
+  conventional resume headings; heavily designed multi-column PDFs can parse
+  imperfectly. A layout-aware parser (or an LLM extraction fallback behind an
+  optional key) would harden this.</li>
+  <li><strong>Lexical retrieval.</strong> TF-IDF matches words, not meaning.
+  Swapping in a small local embedding model is the clearest quality upgrade
+  and keeps the no-external-API property.</li>
+  <li><strong>Question bank size.</strong> 32 hand-written KB questions plus
+  templates keep generation deterministic but bound the variety; the bank is
+  data, so it can grow without code changes.</li>
+  <li><strong>Scoring.</strong> The system generates and explains questions
+  but does not yet score candidate answers; rubric-based scoring against the
+  KB key points is the natural next feature.</li>
+</ul>
+<p>Deliverables for this assignment: public GitHub repository (full source +
+README), this project document, a hosted live instance, and a short demo
+video walking through upload → role selection → generated questions →
+answer-hint review.</p>
+
+</body>
+</html>
